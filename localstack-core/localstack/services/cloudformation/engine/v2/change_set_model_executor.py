@@ -31,6 +31,11 @@ from localstack.services.cloudformation.v2.entities import ChangeSet
 
 LOG = logging.getLogger(__name__)
 
+EventFromAction={
+    "Add" : "CREATE",
+    "Modify": "UPDATE",
+    "Remove": "DELETE",
+}
 
 @dataclass
 class ChangeSetModelExecutorResult:
@@ -237,9 +242,18 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         if resource_provider is not None:
             # TODO: stack events
             try:
+                if ChangeAction == "Add":
+                    event_type = StackStatus.CREATE_IN_PROGRESS
+                elif ChangeAction == "Modify":
+                    event_type = StackStatus.UPDATE_IN_PROGRESS
+                else:
+                    event_type = StackStatus.DELETE_IN_PROGRESS
+
+                self._change_set.stack.add_stack_event(logical_resource_id, None, status=event_type,)
                 event = resource_provider_executor.deploy_loop(
                     resource_provider, extra_resource_properties, payload
                 )
+
             except Exception as e:
                 reason = str(e)
                 LOG.warning(
@@ -250,11 +264,17 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
                 stack = self._change_set.stack
                 stack_status = stack.status
                 if stack_status == StackStatus.CREATE_IN_PROGRESS:
+                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.CREATE_FAILED, status_reason=reason)
                     stack.set_stack_status(StackStatus.CREATE_FAILED, reason=reason)
                 elif stack_status == StackStatus.UPDATE_IN_PROGRESS:
+                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.UPDATE_FAILED, status_reason=reason)
                     stack.set_stack_status(StackStatus.UPDATE_FAILED, reason=reason)
                 return
         else:
+            LOG.warning(
+                "Resource provider not found for type: %s",resource_type ,
+                exc_info=LOG.isEnabledFor(logging.DEBUG),
+            )
             event = ProgressEvent(OperationStatus.SUCCESS, resource_model={})
 
         self.resources.setdefault(logical_resource_id, {"Properties": {}})
@@ -290,6 +310,12 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
                     physical_resource_id = self._before_resource_physical_id(logical_resource_id)
                     self.resources[logical_resource_id]["PhysicalResourceId"] = physical_resource_id
 
+                if self._change_set.stack.status == StackStatus.CREATE_IN_PROGRESS:
+                    event_type = StackStatus.CREATE_COMPLETE
+                elif self._change_set.stack.status == StackStatus.CREATE_IN_PROGRESS:
+                    event_type = StackStatus.UPDATE_COMPLETE
+                self._change_set.stack.add_stack_event(logical_resource_id, physical_resource_id, status=event_type, status_reason=event.message)
+
             case OperationStatus.FAILED:
                 reason = event.message
                 LOG.warning(
@@ -300,8 +326,11 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
                 stack = self._change_set.stack
                 stack_status = stack.status
                 if stack_status == StackStatus.CREATE_IN_PROGRESS:
+                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.CREATE_FAILED, status_reason=event.message)
                     stack.set_stack_status(StackStatus.CREATE_FAILED, reason=reason)
+
                 elif stack_status == StackStatus.UPDATE_IN_PROGRESS:
+                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.UPDATE_FAILED, status_reason=event.message)
                     stack.set_stack_status(StackStatus.UPDATE_FAILED, reason=reason)
                 else:
                     raise NotImplementedError(f"Unhandled stack status: '{stack.status}'")
