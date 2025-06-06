@@ -10,8 +10,9 @@ from localstack.aws.api.cloudformation import (
     Parameter,
     StackDriftInformation,
     StackDriftStatus,
+    StackEvent,
     StackStatus,
-    StackStatusReason, StackEvent,
+    StackStatusReason,
 )
 from localstack.aws.api.cloudformation import (
     Stack as ApiStack,
@@ -25,7 +26,7 @@ from localstack.services.cloudformation.engine.v2.change_set_model import (
     NodeTemplate,
 )
 from localstack.utils.aws import arns
-from localstack.utils.strings import short_uid, long_uid
+from localstack.utils.strings import long_uid, short_uid
 from localstack.utils.time import timestamp_millis
 
 
@@ -97,13 +98,12 @@ class Stack:
             self.stack_name, self.stack_id, status.value, status_reason=reason or ""
         )
 
-
     def add_stack_event(
-            self,
-            resource_id: str = None,
-            physical_res_id: str = None,
-            status: str = "",
-            status_reason: str = "",
+        self,
+        resource_id: str = None,
+        physical_res_id: str = None,
+        status: str = "",
+        status_reason: str = "",
     ):
         resource_id = resource_id or self.stack_name
         physical_res_id = physical_res_id or self.stack_id
@@ -127,7 +127,7 @@ class Stack:
         if status_reason:
             event["ResourceStatusReason"] = status_reason
 
-        self.events.append(event)
+        self.events.insert(0, event)
 
     def describe_details(self) -> ApiStack:
         result = {

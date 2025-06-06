@@ -2,6 +2,7 @@ import copy
 import logging
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 from typing import Final, Optional
 
 from localstack.aws.api.cloudformation import ChangeAction, StackStatus
@@ -31,11 +32,18 @@ from localstack.services.cloudformation.v2.entities import ChangeSet
 
 LOG = logging.getLogger(__name__)
 
-EventFromAction={
-    "Add" : "CREATE",
+EventFromAction = {
+    "Add": "CREATE",
     "Modify": "UPDATE",
     "Remove": "DELETE",
 }
+
+
+class EventResult(Enum):
+    InProgress = "_IN_PROGRESS"
+    Completed = "_COMPLETED"
+    Failed = "_FAILED"
+
 
 @dataclass
 class ChangeSetModelExecutorResult:
@@ -55,6 +63,25 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         self.resources = dict()
         self.outputs = dict()
         self.resolved_parameters = dict()
+
+    def _get_physical_id(self, logical_resource_id) -> str:
+        physical_resource_id = None
+        try:
+            physical_resource_id = self._after_resource_physical_id(logical_resource_id)
+        except RuntimeError:
+            # The physical id is missing or is set to None, which is invalid.
+            pass
+        if physical_resource_id is None:
+            # The physical resource id is None after an update that didn't rewrite the resource, the previous
+            # resource id is therefore the current physical id of this resource.
+            physical_resource_id = self._before_resource_physical_id(logical_resource_id)
+        return physical_resource_id
+
+    def _get_event_status(
+        self, action: ChangeAction, phase: EventResult = EventResult.InProgress, special_case=None
+    ):
+        operation_event = special_case or EventFromAction[action]
+        return f"{operation_event}{phase.value}"
 
     # TODO: use a structured type for the return value
     def execute(self) -> ChangeSetModelExecutorResult:
@@ -143,6 +170,11 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         self.outputs[delta.after.name] = delta.after.value
         return delta
 
+    def _update_stack_status(self, phase, special_operation_event=None):
+        stack_status = self._change_set.stack.status
+        operation_event = special_operation_event or stack_status.value.split("_")[0]
+        self._change_set.stack.set_stack_status(StackStatus(f"{operation_event}{phase}"))
+
     def _execute_resource_change(
         self, name: str, before: Optional[PreprocResource], after: Optional[PreprocResource]
     ) -> None:
@@ -224,8 +256,11 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         resource_type: str,
         before_properties: Optional[PreprocProperties],
         after_properties: Optional[PreprocProperties],
-    ) -> None:
+    ):
         LOG.debug("Executing resource action: %s for resource '%s'", action, logical_resource_id)
+        status = self._get_event_status(action, EventResult.InProgress)
+        self._change_set.stack.add_stack_event(logical_resource_id, None, status=status)
+
         resource_provider_executor = ResourceProviderExecutor(
             stack_name=self._change_set.stack.stack_name, stack_id=self._change_set.stack.stack_id
         )
@@ -242,14 +277,6 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         if resource_provider is not None:
             # TODO: stack events
             try:
-                if ChangeAction == "Add":
-                    event_type = StackStatus.CREATE_IN_PROGRESS
-                elif ChangeAction == "Modify":
-                    event_type = StackStatus.UPDATE_IN_PROGRESS
-                else:
-                    event_type = StackStatus.DELETE_IN_PROGRESS
-
-                self._change_set.stack.add_stack_event(logical_resource_id, None, status=event_type,)
                 event = resource_provider_executor.deploy_loop(
                     resource_provider, extra_resource_properties, payload
                 )
@@ -261,18 +288,12 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
                     reason,
                     exc_info=LOG.isEnabledFor(logging.DEBUG),
                 )
-                stack = self._change_set.stack
-                stack_status = stack.status
-                if stack_status == StackStatus.CREATE_IN_PROGRESS:
-                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.CREATE_FAILED, status_reason=reason)
-                    stack.set_stack_status(StackStatus.CREATE_FAILED, reason=reason)
-                elif stack_status == StackStatus.UPDATE_IN_PROGRESS:
-                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.UPDATE_FAILED, status_reason=reason)
-                    stack.set_stack_status(StackStatus.UPDATE_FAILED, reason=reason)
+                self._update_stack_status(EventResult.Failed)
                 return
         else:
             LOG.warning(
-                "Resource provider not found for type: %s",resource_type ,
+                "Resource provider not found for type: %s",
+                resource_type,
                 exc_info=LOG.isEnabledFor(logging.DEBUG),
             )
             event = ProgressEvent(OperationStatus.SUCCESS, resource_model={})
@@ -280,41 +301,22 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
         self.resources.setdefault(logical_resource_id, {"Properties": {}})
         match event.status:
             case OperationStatus.SUCCESS:
-                # merge the resources state with the external state
-                # TODO: this is likely a duplicate of updating from extra_resource_properties
-
-                # TODO: add typing
-                # TODO: avoid the use of string literals for sampling from the object, use typed classes instead
-                # TODO: avoid sampling from resources and use tmp var reference
-                # TODO: add utils functions to abstract this logic away (resource.update(..))
-                # TODO: avoid the use of setdefault (debuggability/readability)
-                # TODO: review the use of merge
-
                 self.resources[logical_resource_id]["Properties"].update(event.resource_model)
                 self.resources[logical_resource_id].update(extra_resource_properties)
                 # XXX for legacy delete_stack compatibility
                 self.resources[logical_resource_id]["LogicalResourceId"] = logical_resource_id
                 self.resources[logical_resource_id]["Type"] = resource_type
 
-                # TODO: review why the physical id is returned as None during updates
-                # TODO: abstract this in member function of resource classes instead
-                physical_resource_id = None
-                try:
-                    physical_resource_id = self._after_resource_physical_id(logical_resource_id)
-                except RuntimeError:
-                    # The physical id is missing or is set to None, which is invalid.
-                    pass
-                if physical_resource_id is None:
-                    # The physical resource id is None after an update that didn't rewrite the resource, the previous
-                    # resource id is therefore the current physical id of this resource.
-                    physical_resource_id = self._before_resource_physical_id(logical_resource_id)
-                    self.resources[logical_resource_id]["PhysicalResourceId"] = physical_resource_id
+                physical_resource_id = self._get_physical_id(logical_resource_id)
+                self.resources[logical_resource_id]["PhysicalResourceId"] = physical_resource_id
 
-                if self._change_set.stack.status == StackStatus.CREATE_IN_PROGRESS:
-                    event_type = StackStatus.CREATE_COMPLETE
-                elif self._change_set.stack.status == StackStatus.CREATE_IN_PROGRESS:
-                    event_type = StackStatus.UPDATE_COMPLETE
-                self._change_set.stack.add_stack_event(logical_resource_id, physical_resource_id, status=event_type, status_reason=event.message)
+                status = self._get_event_status(action, EventResult.Completed)
+                self._change_set.stack.add_stack_event(
+                    logical_resource_id,
+                    physical_resource_id,
+                    status=status,
+                    status_reason=event.message,
+                )
 
             case OperationStatus.FAILED:
                 reason = event.message
@@ -322,20 +324,27 @@ class ChangeSetModelExecutor(ChangeSetModelPreproc):
                     "Resource provider operation failed: '%s'",
                     reason,
                 )
-                # TODO: duplication
-                stack = self._change_set.stack
-                stack_status = stack.status
-                if stack_status == StackStatus.CREATE_IN_PROGRESS:
-                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.CREATE_FAILED, status_reason=event.message)
-                    stack.set_stack_status(StackStatus.CREATE_FAILED, reason=reason)
 
-                elif stack_status == StackStatus.UPDATE_IN_PROGRESS:
-                    self._change_set.stack.add_stack_event(logical_resource_id, status=StackStatus.UPDATE_FAILED, status_reason=event.message)
-                    stack.set_stack_status(StackStatus.UPDATE_FAILED, reason=reason)
-                else:
-                    raise NotImplementedError(f"Unhandled stack status: '{stack.status}'")
+                status = self._get_event_status(action, EventResult.Failed)
+                self._change_set.stack.add_stack_event(
+                    logical_resource_id, status=status, status_reason=event.message
+                )
+
+            case OperationStatus.IN_PROGRESS:
+                physical_resource_id = self._after_resource_physical_id(logical_resource_id)
+
+                status = self._get_event_status(action, EventResult.InProgress)
+                self._change_set.stack.add_stack_event(
+                    logical_resource_id,
+                    physical_resource_id,
+                    status=status,
+                    status_reason=event.message,
+                )
+
             case any:
                 raise NotImplementedError(f"Event status '{any}' not handled")
+
+        return event
 
     def create_resource_provider_payload(
         self,

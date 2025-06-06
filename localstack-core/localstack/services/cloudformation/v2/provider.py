@@ -402,8 +402,8 @@ class CloudformationProviderV2(CloudformationProvider):
                 stack_candidates = []
                 for stack in state.stacks_v2.values():
                     if (
-                            stack.stack_name == stack_name
-                            and stack.status != StackStatus.DELETE_COMPLETE
+                        stack.stack_name == stack_name
+                        and stack.status != StackStatus.DELETE_COMPLETE
                     ):
                         stack_candidates.append(stack)
                 if len(stack_candidates) == 0:
