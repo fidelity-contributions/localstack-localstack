@@ -94,11 +94,11 @@ class Stack:
         if reason:
             self.status_reason = reason
 
-        self.add_stack_event(
+        self.add_resource_event(
             self.stack_name, self.stack_id, status.value, status_reason=reason or ""
         )
 
-    def add_stack_event(
+    def add_resource_event(
         self,
         resource_id: str = None,
         physical_res_id: str = None,

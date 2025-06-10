@@ -23,7 +23,9 @@ def capture_per_resource_events(
         per_resource_events = defaultdict(list)
         for event in events:
             if logical_resource_id := event.get("LogicalResourceId"):
-                per_resource_events[logical_resource_id].append(event)
+                # REMOVE this last conditional when the deleting a stack is supported
+                if not event["ResourceStatus"].startswith("DELETE"):
+                    per_resource_events[logical_resource_id].append(event)
         return per_resource_events
 
     return capture

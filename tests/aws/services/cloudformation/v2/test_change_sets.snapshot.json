@@ -95,7 +95,7 @@
     }
   },
   "tests/aws/services/cloudformation/v2/test_change_sets.py::TestCaptureUpdateProcess::test_direct_update": {
-    "recorded-date": "06-06-2025, 20:18:07",
+    "recorded-date": "09-06-2025, 22:03:38",
     "recorded-content": {
       "create-change-set-1": {
         "Id": "arn:<partition>:cloudformation:<region>:111111111111:changeSet/<resource:1>",
@@ -303,7 +303,7 @@
       "execute-change-set-2": {
         "ResponseMetadata": {
           "HTTPHeaders": {},
-          "HTTPStatusCode": 200
+          "HTTPStresultatusCode": 200
         }
       },
       "post-create-2-describe": {
@@ -324,26 +324,6 @@
       },
       "per-resource-events": {
         "Foo": [
-          {
-            "EventId": "Foo-65626544-e7eb-430e-82b3-98d29f94c40b",
-            "LogicalResourceId": "Foo",
-            "PhysicalResourceId": "arn:<partition>:sns:<region>:111111111111:topic-1",
-            "ResourceStatus": "DELETE_COMPLETE",
-            "ResourceType": "AWS::SNS::Topic",
-            "StackId": "arn:<partition>:cloudformation:<region>:111111111111:stack/<stack-name:1>/<resource:2>",
-            "StackName": "<stack-name:1>",
-            "Timestamp": "timestamp"
-          },
-          {
-            "EventId": "Foo-f47a5373-5f8f-47fe-86bd-cc49e32ed73d",
-            "LogicalResourceId": "Foo",
-            "PhysicalResourceId": "arn:<partition>:sns:<region>:111111111111:topic-1",
-            "ResourceStatus": "DELETE_IN_PROGRESS",
-            "ResourceType": "AWS::SNS::Topic",
-            "StackId": "arn:<partition>:cloudformation:<region>:111111111111:stack/<stack-name:1>/<resource:2>",
-            "StackName": "<stack-name:1>",
-            "Timestamp": "timestamp"
-          },
           {
             "EventId": "Foo-UPDATE_COMPLETE-date",
             "LogicalResourceId": "Foo",

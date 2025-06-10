@@ -76,30 +76,42 @@ class SNSTopicProvider(ResourceProvider[SNSTopicProperties]):
         model = request.desired_state
         sns = request.aws_client_factory.sns
 
-        attributes = {
-            k: v
-            for k, v in model.items()
-            if v is not None
-            if k not in ["TopicName", "Subscription", "Tags"]
-        }
-        if (fifo_topic := attributes.get("FifoTopic")) is not None:
-            attributes["FifoTopic"] = canonicalize_bool_to_str(fifo_topic)
+        if not request.custom_context.get(REPEATED_INVOCATION):
+            request.custom_context[REPEATED_INVOCATION] = True
+            attributes = {
+                k: v
+                for k, v in model.items()
+                if v is not None
+                if k not in ["TopicName", "Subscription", "Tags"]
+            }
+            if (fifo_topic := attributes.get("FifoTopic")) is not None:
+                attributes["FifoTopic"] = canonicalize_bool_to_str(fifo_topic)
 
-        if archive_policy := attributes.get("ArchivePolicy"):
-            archive_policy["MessageRetentionPeriod"] = str(archive_policy["MessageRetentionPeriod"])
-            attributes["ArchivePolicy"] = json.dumps(archive_policy)
+            if archive_policy := attributes.get("ArchivePolicy"):
+                archive_policy["MessageRetentionPeriod"] = str(
+                    archive_policy["MessageRetentionPeriod"]
+                )
+                attributes["ArchivePolicy"] = json.dumps(archive_policy)
 
-        if (content_based_dedup := attributes.get("ContentBasedDeduplication")) is not None:
-            attributes["ContentBasedDeduplication"] = canonicalize_bool_to_str(content_based_dedup)
+            if (content_based_dedup := attributes.get("ContentBasedDeduplication")) is not None:
+                attributes["ContentBasedDeduplication"] = canonicalize_bool_to_str(
+                    content_based_dedup
+                )
 
-        # Default name
-        if model.get("TopicName") is None:
-            model["TopicName"] = (
-                f"topic-{short_uid()}.fifo" if fifo_topic else f"topic-{short_uid()}"
+            # Default name
+            if model.get("TopicName") is None:
+                model["TopicName"] = (
+                    f"topic-{short_uid()}.fifo" if fifo_topic else f"topic-{short_uid()}"
+                )
+
+            create_sns_response = sns.create_topic(Name=model["TopicName"], Attributes=attributes)
+            model["TopicArn"] = create_sns_response["TopicArn"]
+
+            return ProgressEvent(
+                status=OperationStatus.IN_PROGRESS,
+                resource_model=model,
+                custom_context=request.custom_context,
             )
-
-        create_sns_response = sns.create_topic(Name=model["TopicName"], Attributes=attributes)
-        model["TopicArn"] = create_sns_response["TopicArn"]
 
         # now we add subscriptions if they exists
         for subscription in model.get("Subscription", []):

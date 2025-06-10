@@ -22,7 +22,6 @@ pytestmark = pytest.mark.skipif(
 @markers.snapshot.skip_snapshot_verify(
     paths=[
         "delete-describe..*",
-        #
         # Before/After Context
         "$..Capabilities",
         "$..NotificationARNs",
